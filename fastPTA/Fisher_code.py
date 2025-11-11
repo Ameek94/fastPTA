@@ -274,6 +274,7 @@ def compute_fisher(
     signal_model=power_law_model,
     signal_parameters=SMBBH_parameters,
     signal_lm=default_signal_lm,
+    signal_lm_V=None,
     get_tensors_kwargs={},
     generate_catalog_kwargs={},
 ):
@@ -356,16 +357,16 @@ def compute_fisher(
     )
 
     if anisotropies:
-        # Computes the fisher
-        SNR_integrand, effective_noise, fisher_integrand = get_integrands_lm(
-            signal_lm,
-            signal,
-            dsignal,
-            response_IJ,
-            strain_omega,
-            HD_functions_IJ,
-            lm_basis_idx,
-        )
+        # Computes the fisher for anisotropic backgrounds, both intensity and circular polarisation (if requested)
+            SNR_integrand, effective_noise, fisher_integrand = get_integrands_lm(
+                signal_lm,
+                signal,
+                dsignal,
+                response_IJ,
+                strain_omega,
+                HD_functions_IJ,
+                lm_basis_idx,
+            )
 
     else:
         # Computes the fisher

@@ -292,6 +292,65 @@ def gamma(p_I, hat_k):
     # Sum the two terms and return
     return first_term + second_term
 
+@jax.jit
+def gamma_V(p_I, hat_k):
+    """
+    Compute the gamma function for circular polarization.
+
+    Parameters:
+    -----------
+    p_I : Array
+        2D array of unit vectors representing the pulsar directions.
+        Assumed to have shape (N, 3), N is the number of pulsars.
+
+    hat_k : Array
+        Array of unit vectors representing the pixel directions.
+        Assumed to have shape (pp, 3), pp is the number of pixels.
+
+    Returns:
+    --------
+    gamma : Array
+        3D array of gamma values computed for all pulsar pairs and pixels
+        The shape will be (N, N, pp) where  N is the number of pulsars and pp is
+        the number of pixels.
+
+    """
+
+    # This is the dot product of the unit vectors pointing towards the pulsars
+    pIpJ = jnp.einsum("iv,jv->ij", p_I, p_I)
+
+    # This is the dot product of p_I and hat_k
+    pIdotk = jnp.einsum("iv,jv->ij", p_I, hat_k)
+
+    # Create the sum and difference vectors to use later
+    sum = 1 + pIdotk
+    diff = 1 - pIdotk
+
+    # Compute the second term
+    second_term = -diff[:, None, :] * diff[None, ...]
+
+    # This is the pIdotk * pJdotk term in the numerator of the first term
+    pk_qk = pIdotk[:, None, :] * pIdotk[None, ...]
+
+    # Get the numerator of the first term
+    numerator = 2 * (pIpJ[..., None] - pk_qk) ** 2
+
+    # Get the denominator of the first term
+    denominator = sum[:, None, :] * sum[None, ...]
+
+    # Where the denominator is non zero, just numerator / denominator
+    first_term = jnp.where(denominator != 0.0, numerator / denominator, 0.0)
+
+    # Correct first term where the denominator is zero and pI = pJ
+    first_term = jnp.where(
+        ((denominator == 0.0) & (jnp.bool_(jnp.floor(pk_qk)))),
+        -2.0 * second_term,
+        first_term,
+    )
+
+    # Sum the two terms and return
+    return first_term + second_term
+
 
 def get_correlations_lm_IJ_spherical_harmonics_basis(p_I, l_max, gamma_pq):
     """
@@ -473,6 +532,104 @@ def get_response_IJ_lm(
 
     # combine the Hellings and Downs part and the time part
     return time_tensor_IJ[None, ...] * correlations_lm_IJ[:, None, ...]
+
+def get_correlations_lm_IJ_V(
+    p_I, l_max, nside, lm_basis="spherical_harmonics_basis"
+):
+    """
+    Compute the response tensor for circular polarization for given angular separations and time tensors.
+
+    Parameters:
+    -----------
+    p_I : Array
+        2D array of unit vectors representing the pulsar directions.
+        Assumed to have shape (N, 3), N is the number of pulsars.
+    l_max : int
+        Maximum ell value.
+    nside : int
+        Resolution parameter for the HEALPix grid.
+    lm_basis : str
+        Basis to compute the correlations.
+        Can be either "spherical_harmonics_basis" or "sqrt_basis".
+
+    Returns:
+    --------
+    correlations_lm_IJ : numpy.ndarray
+        3D or 4D array of correlations computed in the given basis.
+        If lm_basis is "spherical_harmonics_basis", it has shape
+        (lm, N, N), where lm = (l_max + 1)**2 is the number of spherical
+        harmonics coefficients and N is the number of pulsars.
+        If lm_basis is "sqrt_basis", it has shape (lm, lm, N, N). (sqrt basis is not implemented for V)
+    """
+
+    # Given nside get a pixelization of the sky
+    npix = hp.nside2npix(nside)
+    theta_k, phi_k = hp.pix2ang(nside, jnp.arange(npix))
+    theta_k = jnp.array(theta_k)
+    phi_k = jnp.array(phi_k)
+
+    # Get the k vector (i.e., the sky direction) for all the pixels
+    hat_k = gds.unit_vector(theta_k, phi_k)
+
+
+    # Compute gamma in all the pixels, the shape is (N, N, pp)
+    gamma_pq = 3.0 / 8.0 * gamma_V(p_I, hat_k) # AM - this function needs to be properly implemented for V
+
+    # Compute the correlations on lm basis (AM - this does not need changing for V)
+    if lm_basis.lower() == "spherical_harmonics_basis":
+        correlations_lm_IJ = get_correlations_lm_IJ_spherical_harmonics_basis(
+            p_I, l_max, gamma_pq
+        )
+
+    elif lm_basis.lower() == "sqrt_basis":
+        correlations_lm_IJ = get_correlations_lm_IJ_sqrt_basis(
+            p_I, l_max, theta_k, phi_k, gamma_pq
+        )
+
+    # return the correlations
+    return correlations_lm_IJ
+
+
+def get_response_IJ_lm_V(
+    p_I, time_tensor_IJ, l_max, nside, lm_basis="spherical_harmonics_basis"
+):
+    """
+    Compute the response tensor for circular polarization for given angular separations and time tensors.
+
+    Parameters:
+    -----------
+    p_I : Array
+        2D array of unit vectors representing the pulsar directions.
+        Assumed to have shape (N, 3), N is the number of pulsars.
+    time_tensor_IJ : Array
+        3D array containing the attenuations due to the observation time for
+        all the pulsars and for all frequencies. Should have shape (F, N, N),
+        where F is the number of frequencies and N is the number of pulsars.
+    l_max : int
+        Maximum ell value.
+    nside : int
+        Resolution parameter for the HEALPix grid.
+    lm_basis : str
+        Basis to compute the correlations.
+        Can be either "spherical_harmonics_basis" or "sqrt_basis".
+
+    Returns:
+    --------
+    response_IJ : Array
+        4D array containing response tensor for all the pulsars pairs.
+        It has shape (lm, F, N, N), where lm is the number of coefficients for
+        the anisotropy decomposition (spherical harmonics or sqrt basis), F is
+        the number of frequencies, N is the number of pulsars.
+
+    """
+
+    # Compute the correlations on lm basis
+    correlations_lm_IJ = get_correlations_lm_IJ_V(
+        p_I, l_max, nside, lm_basis=lm_basis
+    )
+
+    # AM - start from l=1 to exclude monopole for circular polarization
+    return time_tensor_IJ[None, ...] * correlations_lm_IJ[1:, None, ...]
 
 
 @jax.jit
@@ -767,6 +924,7 @@ def get_tensors(
     anisotropies=False,
     lm_basis="spherical_harmonics_basis",
     l_max=0,
+    circ_pol=False,
     nside=16,
     regenerate_catalog=False,
     **generate_catalog_kwargs,
@@ -903,6 +1061,12 @@ def get_tensors(
         response_IJ = get_response_IJ_lm(
             pi_vec, time_tensor_IJ, l_max, nside, lm_basis=lm_basis
         )
+        if circ_pol:
+            response_IJ_V = get_response_IJ_lm_V(
+                pi_vec, time_tensor_IJ, l_max, nside, lm_basis=lm_basis
+            )
+            response_IJ = jnp.concatenate([response_IJ, response_IJ_V], axis=0)
+        
 
     # and if needed the HD part
     if HD_order > 0 and HD_basis.lower() == "legendre":
