@@ -45,10 +45,10 @@ tilt = 2.0  # Tilt
 N_realizations = 30
 
 # Whether you want to regenerate the fisher data
-regenerate_fisher_data = False
+regenerate_fisher_data = True
 
 # Whether you want to regenerate the sample data
-regenerate_sample_data = False
+regenerate_sample_data = True
 
 # Name of the outfile, no need for the extension
 # (will be stored in generated_data/)
@@ -76,6 +76,8 @@ signal_lm = (
     1e-30 / np.sqrt(4 * np.pi) * np.ones(sph.get_n_coefficients_real(l_max))
 )
 
+
+
 # The monopole is set to 1 (with the right normalization)
 signal_lm[0] = 1.0 / np.sqrt(4 * np.pi)
 
@@ -86,7 +88,7 @@ signal_parameters = np.array([log_amplitude, tilt])
 shape_params = len(signal_parameters)
 
 # The monopole is not included in the fisher analysis since it's degenerate
-means = np.concatenate((signal_parameters, signal_lm[1:]))
+means = np.concatenate((signal_parameters, signal_lm[1:], signal_lm[1:]))
 
 # The number of parameters used in the fisher analysis
 n_params = len(means)
@@ -107,6 +109,7 @@ get_tensors_kwargs = {
     "add_curn": False,
     "regenerate_catalog": True,
     "anisotropies": True,
+    "circ_pol": True,
     "l_max": l_max,
 }
 
