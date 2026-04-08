@@ -121,7 +121,7 @@ def get_MCMC_data(
         )
 
         # Gets all the ingredients to compute the fisher
-        strain_omega, response_IJ, HD_functions_IJ, HD_coeffs = get_tensors(
+        strain_omega, response_IJ, HD_functions_IJ, HD_coeffs, _ = get_tensors(
             frequency, **get_tensors_kwargs, **generate_catalog_kwargs
         )
 

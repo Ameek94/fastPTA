@@ -410,3 +410,114 @@ def get_signal_dsignal_tensors_lm(
     return jax.lax.switch(
         lm_basis_idx, lm_basis_list, signal_lm, signal, dsignal, response_IJ
     )
+
+
+@jax.jit
+def get_signal_dsignal_tensors_V_lm_spherical_harmonics_basis(
+    signal_lm_V, signal, dsignal, response_IJ_V
+):
+    """
+    Compute the V-mode (circular polarization) signal tensor and its
+    derivatives in the spherical harmonics basis. Mirrors the I-mode function
+    but uses V-mode lm coefficients and response tensors.
+
+    Parameters:
+    -----------
+    signal_lm_V : Array
+        Array containing the V-mode lm coefficients (monopole excluded).
+    signal : Array
+        Array containing the signal evaluated at all frequencies.
+    dsignal : Array
+        2D array containing derivative of the signal data with respect to the
+        signal parameters. Shape (P, F) where P is the number of spectral
+        parameters, F is the number of frequency bins.
+    response_IJ_V : Array
+        4D array containing the V-mode response tensor for all pulsar pairs.
+        Shape (lm_V, F, N, N), where lm_V is the number of V-mode spherical
+        harmonics coefficients (monopole excluded).
+
+    Returns:
+    --------
+    Tuple containing:
+    - signal_tensor_V : Array
+        The V-mode signal tensor (real antisymmetric). Shape (F, N, N).
+    - dsignal_tensor_V_freq : Array
+        Derivative of the V-mode signal tensor with respect to spectral
+        parameters. Shape (P, F, N, N).
+    - dsignal_tensor_V_aniso : Array
+        Derivative of the V-mode signal tensor with respect to the V-mode
+        lm coefficients. Shape (lm_V, F, N, N).
+
+    """
+
+    # V-mode signal_lm_f: outer product of V-mode coefficients with spectrum
+    signal_lm_V_f = jnp.einsum("a,f->af", signal_lm_V, signal)
+
+    # V-mode signal tensor: sum over V-mode lm coefficients
+    signal_tensor_V = jnp.einsum("afIJ,af->fIJ", response_IJ_V, signal_lm_V_f)
+
+    # Spectral derivatives of V-mode signal tensor
+    dsignal_lm_V_f = jnp.einsum("a,pf->paf", signal_lm_V, dsignal)
+
+    dsignal_tensor_V_freq = jnp.einsum(
+        "afIJ,paf->pfIJ", response_IJ_V, dsignal_lm_V_f
+    )
+
+    # Derivatives w.r.t. V-mode lm coefficients (Kronecker delta in lm space)
+    delta_V = jnp.eye(len(signal_lm_V_f))
+    dsignal_lm_V_f_aniso = jnp.einsum("pq,f->pqf", delta_V, signal)
+
+    dsignal_tensor_V_aniso = jnp.einsum(
+        "pfIJ,pqf->pfIJ", response_IJ_V, dsignal_lm_V_f_aniso
+    )
+
+    return (
+        signal_tensor_V,
+        dsignal_tensor_V_freq,
+        dsignal_tensor_V_aniso,
+    )
+
+
+lm_basis_list_V = [
+    get_signal_dsignal_tensors_V_lm_spherical_harmonics_basis,
+]
+
+
+@jax.jit
+def get_signal_dsignal_tensors_V_lm(
+    lm_basis_idx, signal_lm_V, signal, dsignal, response_IJ_V
+):
+    """
+    Compute the V-mode signal and its derivatives, dispatching to the
+    appropriate basis function.
+
+    Parameters:
+    -----------
+    lm_basis_idx : int
+        Index indicating the basis to use for the anisotropy decomposition.
+    signal_lm_V : Array
+        Array containing the V-mode lm coefficients.
+    signal : Array
+        Array containing the signal evaluated at all frequencies.
+    dsignal : Array
+        2D array of signal derivatives. Shape (P, F).
+    response_IJ_V : Array
+        4D V-mode response tensor. Shape (lm_V, F, N, N).
+
+    Returns:
+    --------
+    Tuple containing:
+    - signal_tensor_V : Array
+    - dsignal_tensor_V_freq : Array
+    - dsignal_tensor_V_aniso : Array
+
+    """
+
+    return jax.lax.switch(
+        lm_basis_idx,
+        lm_basis_list_V,
+        signal_lm_V,
+        signal,
+        dsignal,
+        response_IJ_V,
+    )

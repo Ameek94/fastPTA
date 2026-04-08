@@ -76,10 +76,13 @@ signal_lm = (
     1e-30 / np.sqrt(4 * np.pi) * np.ones(sph.get_n_coefficients_real(l_max))
 )
 
-
-
 # The monopole is set to 1 (with the right normalization)
 signal_lm[0] = 1.0 / np.sqrt(4 * np.pi)
+
+# V-mode lm coefficients (monopole excluded, so starts from l=1)
+# Set to zero for fiducial V=0
+n_lm_V = sph.get_n_coefficients_real(l_max) - 1  # exclude monopole
+signal_lm_V = np.zeros(n_lm_V)
 
 # The two parameters characterizing the signal in frequency
 signal_parameters = np.array([log_amplitude, tilt])
@@ -88,7 +91,7 @@ signal_parameters = np.array([log_amplitude, tilt])
 shape_params = len(signal_parameters)
 
 # The monopole is not included in the fisher analysis since it's degenerate
-means = np.concatenate((signal_parameters, signal_lm[1:], signal_lm[1:]))
+means = np.concatenate((signal_parameters, signal_lm[1:], signal_lm_V))
 
 # The number of parameters used in the fisher analysis
 n_params = len(means)
@@ -120,6 +123,7 @@ fisher_kwargs = {
     "signal_model": signal_model,
     "signal_parameters": signal_parameters,
     "signal_lm": signal_lm,
+    "signal_lm_V": signal_lm_V,
 }
 # %%
 

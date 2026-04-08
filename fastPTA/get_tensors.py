@@ -1169,6 +1169,8 @@ def get_tensors(
     # compute angular separations
     zeta_IJ = jnp.einsum("ik, jk->ij", pi_vec, pi_vec)
 
+    response_IJ_V = None
+
     if not anisotropies:
         # compute the response
         response_IJ = get_response_IJ(zeta_IJ, time_tensor_IJ)
@@ -1181,8 +1183,6 @@ def get_tensors(
             response_IJ_V = get_response_IJ_lm_V(
                 pi_vec, time_tensor_IJ, l_max, nside, lm_basis=lm_basis
             )
-            response_IJ = jnp.concatenate([response_IJ, response_IJ_V], axis=0)
-        
 
     # and if needed the HD part
     if HD_order > 0 and HD_basis.lower() == "legendre":
@@ -1201,4 +1201,4 @@ def get_tensors(
         )
         HD_coefficients = jnp.zeros(shape=(0,))
 
-    return strain_omega, response_IJ, HD_functions_IJ, HD_coefficients
+    return strain_omega, response_IJ, HD_functions_IJ, HD_coefficients, response_IJ_V
