@@ -151,7 +151,7 @@ def fig_Cl_I(summary, per_n, ell, ng15, outdir):
 
     box = dict(boxstyle="round", facecolor="white", alpha=0.9,
                linewidth=0.8, edgecolor="0.7")
-    ax.text(0.97, 0.97, "Noiseless (CVL)\nNANOGrav positions",
+    ax.text(0.97, 0.97, "Noiseless (CVL)",
             transform=ax.transAxes, fontsize=8, va="top", ha="right", bbox=box)
 
     ax.set_xlabel(r"$\ell$")
@@ -193,7 +193,7 @@ def fig_Cl_V(summary, per_n, ell, outdir):
 
     box = dict(boxstyle="round", facecolor="white", alpha=0.9,
                linewidth=0.8, edgecolor="0.7")
-    ax.text(0.97, 0.97, "Noiseless (CVL)\nNANOGrav positions",
+    ax.text(0.97, 0.97, "Noiseless (CVL)",
             transform=ax.transAxes, fontsize=8, va="top", ha="right", bbox=box)
     ax.set_xlabel(r"$\ell$")
     ax.set_ylabel(r"$C_\ell^V \;/\; C_0$  (95% upper limit)")
