@@ -21,6 +21,10 @@ The folders 'example_paper_anisotropies' and 'examples_paper_cosmic_variance' co
 In order of priority, the notebooks we would like to replicate from the intensity only analysis in the 'example_paper_anisotropies' and 'examples_paper_cosmic_variance' folders are:
 linear_basis.ipynb: Perform C_l^I and C_l^V upper limit analysis using the linear basis. This is the most important notebook to have, and should be done first. For circular polarization there are no existing upper limits but we we can compare against prior only upper limits for C_l^V.
 
+linear_basis_CVL.ipynb: Extend the linear basis upper limit analysis to the CVL case, and compare the results. CVL is the cosmic variance limit (noiseless case), so we can compare against the prior only upper limits for C_l^I and C_l^V to see how much improvement is possible in the ideal case. Some useful PTA configurations to use:
+- N_p=100, 200, 1000 pulsars, isotropically distributed on the sky, T_obs=20yrs, cad=2 weeks, note here cadence only sets the upper frequency cutoff, rather than a noise level.
+
+
 plot_all_results.ipynb: extend again to intensity and circular polarization anisotropies, and compare the results.
 
 Why the Fisher is block-diagonal at fiducial $V=0$
