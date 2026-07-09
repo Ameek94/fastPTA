@@ -42,6 +42,10 @@ def get_MCMC_data(
     path_to_MCMC_data="generated_data/MCMC_data.npz",
     get_tensors_kwargs={},
     generate_catalog_kwargs={},
+    signal_lm=None,
+    signal_lm_V=None,
+    signal_model_V=None,
+    signal_parameters_V=None,
 ):
     """
     Loads or regenerate data for Markov Chain Monte Carlo (MCMC) analysis. If
@@ -85,6 +89,16 @@ def get_MCMC_data(
         Additional keyword arguments for generate_catalog_kwargs
         Default is {}.
 
+    To inject circular polarisation (Stokes V), pass the (real) spherical
+    harmonic injection coefficients `signal_lm` (intensity, length
+    ``(l_max+1)**2``) and `signal_lm_V` (V-mode, monopole excluded, length
+    ``(l_max+1)**2 - 1``) together with a `signal_model_V` and its
+    `signal_parameters_V`. The lm responses returned by `get_tensors`
+    (`anisotropies=True`, `circ_pol=True` are forced) are contracted with these
+    coefficients to a fixed angular pattern, and the data are generated with the
+    complex Hermitian covariance ``C = R + i A``. The contracted V response is
+    returned so that the same fixed pattern can be used in the likelihood.
+
     Returns:
     --------
     Tuple containing:
@@ -96,8 +110,13 @@ def get_MCMC_data(
         Array containing response function.
     - strain_omega: numpy.ndarray
         Array containing strain noise.
+    - response_IJ_V: numpy.ndarray or None
+        Contracted V-mode response (F, N, N) when circular polarisation is
+        included, otherwise None.
 
     """
+
+    include_V = signal_lm_V is not None
 
     try:
         if regenerate_MCMC_data:
@@ -108,6 +127,7 @@ def get_MCMC_data(
         MCMC_data = data["data"]
         response_IJ = data["response_IJ"]
         strain_omega = data["strain_omega"]
+        response_IJ_V = data["response_IJ_V"] if "response_IJ_V" in data else None
 
     except FileNotFoundError:
         print("\nRegenerating MCMC data")
@@ -120,10 +140,40 @@ def get_MCMC_data(
             signal_model.template(frequency, signal_parameters)
         )
 
+        # For circular polarisation we need the anisotropic lm responses and
+        # the V-mode response from get_tensors
+        if include_V:
+            get_tensors_kwargs = {
+                **get_tensors_kwargs,
+                "anisotropies": True,
+                "circ_pol": True,
+            }
+
         # Gets all the ingredients to compute the fisher
-        strain_omega, response_IJ, HD_functions_IJ, HD_coeffs, _ = get_tensors(
+        (
+            strain_omega,
+            response_IJ,
+            HD_functions_IJ,
+            HD_coeffs,
+            response_IJ_V,
+        ) = get_tensors(
             frequency, **get_tensors_kwargs, **generate_catalog_kwargs
         )
+
+        signal_std_V = None
+        if include_V:
+            # Contract the lm responses with the injected coefficients to fix
+            # the angular pattern: (n_lm, F, N, N) -> (F, N, N)
+            response_IJ = jnp.einsum(
+                "vfij,v->fij", response_IJ, jnp.asarray(signal_lm)
+            )
+            response_IJ_V = jnp.einsum(
+                "vfij,v->fij", response_IJ_V, jnp.asarray(signal_lm_V)
+            )
+            # V-mode spectral amplitude P_V(f); std is sqrt(P_V)
+            signal_std_V = np.sqrt(
+                signal_model_V.template(frequency, signal_parameters_V)
+            )
 
         # Generate MCMC data
         frequency, MCMC_data, response_IJ, strain_omega = generate_MCMC_data(
@@ -134,11 +184,13 @@ def get_MCMC_data(
             response_IJ,
             HD_functions_IJ,
             HD_coeffs,
+            response_IJ_V=response_IJ_V if include_V else None,
+            signal_std_V=signal_std_V,
             save_MCMC_data=save_MCMC_data,
             path_to_MCMC_data=path_to_MCMC_data,
         )
 
-    return frequency, MCMC_data, response_IJ, strain_omega
+    return frequency, MCMC_data, response_IJ, strain_omega, response_IJ_V
 
 
 def get_MCMC_samples(
@@ -267,6 +319,10 @@ def run_MCMC(
     path_to_MCMC_chains="generated_chains/MCMC_chains.npz",
     get_tensors_kwargs={},
     generate_catalog_kwargs={},
+    signal_lm=None,
+    signal_lm_V=None,
+    signal_model_V=None,
+    signal_parameters_V=None,
 ):
     """
     Run Markov Chain Monte Carlo (MCMC) to estimate the posterior distribution
@@ -346,17 +402,23 @@ def run_MCMC(
     """
 
     # Get the data
-    frequency, MCMC_data, response_IJ, strain_omega = get_MCMC_data(
-        regenerate_MCMC_data,
-        T_obs_yrs=T_obs_yrs,
-        n_frequencies=n_frequencies,
-        signal_model=signal_model,
-        signal_parameters=signal_parameters,
-        realization=realization,
-        save_MCMC_data=save_MCMC_data,
-        path_to_MCMC_data=path_to_MCMC_data,
-        get_tensors_kwargs=get_tensors_kwargs,
-        generate_catalog_kwargs=generate_catalog_kwargs,
+    frequency, MCMC_data, response_IJ, strain_omega, response_IJ_V = (
+        get_MCMC_data(
+            regenerate_MCMC_data,
+            T_obs_yrs=T_obs_yrs,
+            n_frequencies=n_frequencies,
+            signal_model=signal_model,
+            signal_parameters=signal_parameters,
+            realization=realization,
+            save_MCMC_data=save_MCMC_data,
+            path_to_MCMC_data=path_to_MCMC_data,
+            get_tensors_kwargs=get_tensors_kwargs,
+            generate_catalog_kwargs=generate_catalog_kwargs,
+            signal_lm=signal_lm,
+            signal_lm_V=signal_lm_V,
+            signal_model_V=signal_model_V,
+            signal_parameters_V=signal_parameters_V,
+        )
     )
 
     # Number of dimensions
@@ -383,6 +445,10 @@ def run_MCMC(
         jnp.array(strain_omega),
         priors,
     ]
+
+    # Append the circular-polarisation (V-mode) ingredients when present
+    if signal_lm_V is not None and response_IJ_V is not None:
+        log_posterior_args += [jnp.array(response_IJ_V), signal_model_V]
 
     # Samples and pdfs
     samples, pdfs = get_MCMC_samples(

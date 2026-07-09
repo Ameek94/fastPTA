@@ -131,7 +131,7 @@ def get_time_tensor(frequencies, pta_span_yrs, Tspan_yr):
 
 @jax.jit
 def gamma_pulsar_pair_analytical(
-    theta_1, phi_1, theta_2, phi_2, theta_n, phi_n
+    theta_1, phi_1, theta_2, phi_2, theta_k, phi_k
 ):
     """
     Compute the analytical expression for the gamma function (see Eq. 13 of
@@ -160,35 +160,41 @@ def gamma_pulsar_pair_analytical(
 
     """
 
-    # Compute x dot n 
-    xdotn = ut.dot_product(theta_n, phi_n, theta_1, phi_1)
+    # Compute p_dot_k
+    p_dot_k = ut.dot_product(theta_k, phi_k, theta_1, phi_1)
 
     # Compute q_dot_k
-    ydotn = ut.dot_product(theta_n, phi_n, theta_2, phi_2)
+    q_dot_k = ut.dot_product(theta_k, phi_k, theta_2, phi_2)
 
     # Compute p_dot_q
-    xdoty = ut.dot_product(theta_1, phi_1, theta_2, phi_2)
-    
-    # First term 
-    num1 = (xdotn**2 + ydotn**2 + (xdotn)**2*(ydotn)**2 - 1)/8
-    denom = (1 + xdotn)*(1 + ydotn)
-    
-    # Second term
-    num2 = (xdoty**2 - 2*xdoty*xdotn*ydotn)/4
-    
-    num = num1 + num2
+    p_dot_q = ut.dot_product(theta_1, phi_1, theta_2, phi_2)
+
+    # This is the second term
+    second_term = -(1.0 - p_dot_k) * (1.0 - q_dot_k)
+
+    # This is the numerator of the first term
+    numerator = 2.0 * (p_dot_q - p_dot_k * q_dot_k) ** 2.0
+
+    # This is the denominator of the first term
+    denominator = (1.0 + p_dot_k) * (1.0 + q_dot_k)
 
     # Where the denominator is non zero, just numerator / denominator,
     # where it's zero a bit more care is needed, if pI != pJ is zero
-    
-    response = jnp.where(denom != 0.0, num/denom, 0.0)
-    
-    conditions = ((denom == 0.0) & (jnp.abs(xdoty - 1.0) < 1e-10))  # xdoty == 1 implies x == y
-    
-    gamma = jnp.where(conditions, 0.5, response)
-    
+    first_term = jnp.where(denominator != 0.0, numerator / denominator, 0.0)
+
+    conditions = (
+        (denominator == 0.0)
+        & (phi_1 - phi_2 == 0.0)
+        & (theta_1 - theta_2 == 0.0)
+    )
+
+    # Correct first term where the denominator is zero and pI = pJ
+    first_term = jnp.where(
+        conditions, -2.0 * second_term, first_term  # type: ignore
+    )
+
     # Sum all the terms up
-    return 3*gamma
+    return first_term + second_term
 
 @jax.jit
 def gamma_analytical(theta, phi, theta_k, phi_k):
@@ -226,17 +232,17 @@ def gamma_analytical(theta, phi, theta_k, phi_k):
     )
 
 @jax.jit
-def gamma(x, n):
+def gamma(p_I, hat_k):
     """
     Compute the gamma function (see Eq. 13 of  2407.14460).
 
     Parameters:
     -----------
-    x : Array
+    p_I : Array
         2D array of unit vectors representing the pulsar directions.
         Assumed to have shape (N, 3), N is the number of pulsars.
 
-    n : Array
+    hat_k : Array
         Array of unit vectors representing the pixel directions.
         Assumed to have shape (pp, 3), pp is the number of pixels.
 
@@ -248,45 +254,41 @@ def gamma(x, n):
         the number of pixels.
 
     """
-    
-    # x_a · n - shape will be (N, pp)
-    xdotn = jnp.einsum("iv,pv->ip", x, n)
-    
-    # (x_a · x_b) - shape will be (N, N)
-    xdotx = jnp.einsum("iv,jv->ij", x, x)
 
-    # Denominator: (1 + x_a·n)(1 + x_b·n) - shape (N, N, pp)
-    summ = 1 + xdotn  # shape (N, pp)
-    denom = summ[:, None, :] * summ[None, :, :]  # shape (N, N, pp)
+    # This is the dot product of the unit vectors pointing towards the pulsars
+    pIpJ = jnp.einsum("iv,jv->ij", p_I, p_I)
 
-    # First numerator term: (xa·n)^2 + (xb·n)^2 + (xa·n)^2(xb·n)^2 - 1
-    # shape (N, N, pp)
-    xdotn_i = xdotn[:, None, :]  # shape (N, 1, pp)
-    xdotn_j = xdotn[None, :, :]  # shape (1, N, pp)
-    
-    num1 = (xdotn_i**2 + xdotn_j**2 + (xdotn_i**2) * (xdotn_j**2) - 1.0)
+    # This is the dot product of p_I and hat_k
+    pIdotk = jnp.einsum("iv,jv->ij", p_I, hat_k)
 
-    # Second numerator term: (xa·xb)^2 - 2(xa·xb)(xa·n)(xb·n)
-    # shape (N, N, pp)
-    xdotx_expanded = xdotx[..., None]  # shape (N, N, 1) -> broadcast to (N, N, pp)
-    num2 = (xdotx_expanded**2 - 2.0 * xdotx_expanded * xdotn_i * xdotn_j)
+    # Create the sum and difference vectors to use later
+    sum = 1 + pIdotk
+    diff = 1 - pIdotk
 
-    # Combine numerators with proper coefficients
-    total_numerator = (num1 + 2 * num2) / 8.0  # shape (N, N, pp)
+    # Compute the second term
+    second_term = -diff[:, None, :] * diff[None, ...]
 
-    # Initial calculation
-    gamma_val = jnp.where(denom != 0.0, total_numerator / denom, 0.0)
+    # This is the pIdotk * pJdotk term in the numerator of the first term
+    pk_qk = pIdotk[:, None, :] * pIdotk[None, ...]
 
-    # Handle the special case: denominator = 0 AND x_i = x_j
-    # Create condition mask
-    x_i_equals_x_j = jnp.isclose(xdotx, 1.0, atol=1e-10)[..., None]  # shape (N, N, 1)
-    denominator_zero = (denom == 0.0)  # shape (N, N, pp)
-    special_condition = denominator_zero & x_i_equals_x_j
+    # Get the numerator of the first term
+    numerator = 2 * (pIpJ[..., None] - pk_qk) ** 2
 
-    # For the special case, the value should be 0.5 (from our limit calculation)
-    gamma = jnp.where(special_condition, 0.5, gamma_val)
+    # Get the denominator of the first term
+    denominator = sum[:, None, :] * sum[None, ...]
 
-    return 3*gamma
+    # Where the denominator is non zero, just numerator / denominator
+    first_term = jnp.where(denominator != 0.0, numerator / denominator, 0.0)
+
+    # Correct first term where the denominator is zero and pI = pJ
+    first_term = jnp.where(
+        ((denominator == 0.0) & (jnp.bool_(jnp.floor(pk_qk)))),
+        -2.0 * second_term,
+        first_term,
+    )
+
+    # Sum the two terms and return
+    return first_term + second_term
 
 @jax.jit
 def gamma_pulsar_pair_analytical_V(
@@ -407,7 +409,7 @@ def gamma_analytical_V(theta, phi, theta_k, phi_k):
     )
 
 @jax.jit
-def gamma_V(x, n): #DO THIS ONE NEXT
+def gamma_V(p_I, hat_k):
     """
     Compute the gamma function for circular polarization.
 
@@ -429,35 +431,34 @@ def gamma_V(x, n): #DO THIS ONE NEXT
         the number of pixels.
 
     """
-    # x = p_I
-    # n = hat_k
-    
-    
+
     # x_a · n - shape will be (N, pp)
-    xdotn = jnp.einsum("iv,pv->ip", x, n)
-    
+    xdotn = jnp.einsum("iv,pv->ip", p_I, hat_k)
+
     # (x_a · x_b) - shape will be (N, N)
-    xdotx = jnp.einsum("iv,jv->ij", x, x)
-    
+    xdotx = jnp.einsum("iv,jv->ij", p_I, p_I)
+
     # n·(x_a cross x_b)
-    xcrossx = jnp.cross(x[:,None,:], x[None, :, :], axis=-1)
-    triprod=jnp.einsum("pk,ijk->pij", n, xcrossx) #(pp, N, N)
-    tripprod = jnp.transpose(triprod, (1,2,0)) #(N, N, pp)
+    xcrossx = jnp.cross(p_I[:, None, :], p_I[None, :, :], axis=-1)
+    triprod = jnp.einsum("pk,ijk->pij", hat_k, xcrossx)  # (pp, N, N)
+    tripprod = jnp.transpose(triprod, (1, 2, 0))  # (N, N, pp)
     
 
     # Denominator: (1 + x_a·n)(1 + x_b·n) - shape (N, N, pp)
     summ = 1 + xdotn  # shape (N, pp)
-    denom = 4*summ[:, None, :] * summ[None, :, :]  # shape (N, N, pp)
-    
-    
-    #  numerator term: [(xa·xb) - (xa·n)•(xb·n)][n•(xa cross xb)] 
-    # shape (N, N, pp)
+    denom = summ[:, None, :] * summ[None, :, :]  # shape (N, N, pp)
+
+
+    #  numerator term: 2 [(xa·xb) - (xa·n)•(xb·n)][n•(xa cross xb)]
+    # shape (N, N, pp). The overall normalisation mirrors the intensity gamma():
+    # gamma_V returns (up to the 3/8 applied in get_correlations_lm_IJ_V) the ORF
+    # (3/2)(F+Fx - FxF+), the circular-polarisation analogue of Eq.13 of 2407.14460.
     xdotn_i = xdotn[:, None, :]  # shape (N, 1, pp)
     xdotn_j = xdotn[None, :, :]  # shape (1, N, pp)
     xdotx_exp = xdotx[:, :,  None]  # shape (N, N, 1) -> broadcast to (N, N, pp)
-    
-    
-    num = (xdotx_exp-(xdotn_i)*(xdotn_j))*tripprod # should be (N, N, pp)
+
+
+    num = 2 * (xdotx_exp-(xdotn_i)*(xdotn_j))*tripprod # should be (N, N, pp)
 
     gamma_val = jnp.where(denom != 0.0, num / denom, 0.0)
 
@@ -689,9 +690,12 @@ def get_correlations_lm_IJ_V(
 
 
     # Compute gamma in all the pixels, the shape is (N, N, pp)
-    gamma_pq = 3.0 / 8.0 * gamma_V(p_I, hat_k) # AM - this function needs to be properly implemented for V
+    # Same convention as the intensity get_correlations_lm_IJ: gamma_V() returns
+    # 4 (F+Fx - FxF+), and 3/8 * gamma_V = (3/2)(F+Fx - FxF+), the circular-polarisation
+    # analogue of Eq.13 of 2407.14460 (same 3/2 normalisation as the intensity ORF).
+    gamma_pq = 3.0 / 8.0 * gamma_V(p_I, hat_k)
 
-    # Compute the correlations on lm basis (AM - this does not need changing for V)
+    # Compute the correlations on lm basis
     if lm_basis.lower() == "spherical_harmonics_basis":
         correlations_lm_IJ = get_correlations_lm_IJ_spherical_harmonics_basis(
             p_I, l_max, gamma_pq
@@ -744,7 +748,7 @@ def get_response_IJ_lm_V(
         p_I, l_max, nside, lm_basis=lm_basis
     )
 
-    # AM - start from l=1 to exclude monopole for circular polarization
+    # start from l=1 to exclude monopole for circular polarization
     return time_tensor_IJ[None, ...] * correlations_lm_IJ[1:, None, ...]
 
 

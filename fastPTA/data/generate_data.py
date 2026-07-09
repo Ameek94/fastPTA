@@ -368,6 +368,8 @@ def generate_MCMC_data(
     response_IJ,
     HD_functions_IJ,
     HD_coeffs,
+    response_IJ_V=None,
+    signal_std_V=None,
     save_MCMC_data=True,
     path_to_MCMC_data="generated_data/MCMC_data.npz",
 ):
@@ -377,6 +379,16 @@ def generate_MCMC_data(
     it generates a realization of the data. Otherwise, it uses the expectation
     value. Data contain both signal and noise. If `save_MCMC_data` is True,
     the generated data is saved to a specified path.
+
+    When `response_IJ_V` and `signal_std_V` are provided, circular polarisation
+    (Stokes V) is included: the per-pair cross-spectral density becomes the
+    complex Hermitian matrix ``C = R + i A``, with ``R`` the (real, symmetric)
+    intensity-plus-noise covariance and ``A`` the (real, antisymmetric) V-mode
+    signal. A realisation is then drawn as a proper joint complex-Gaussian
+    sample ``z ~ CN(0, C)`` with ``data = z z^dagger``; the expectation value is
+    ``data = C``. The returned ``data`` is complex in this case. With the V
+    arguments left as ``None`` the behaviour is identical to the intensity-only
+    case.
 
     Parameters:
     -----------
@@ -389,11 +401,18 @@ def generate_MCMC_data(
     strain_omega : numpy.ndarray
         Array containing the strain noise.
     response_IJ : numpy.ndarray
-        Array containing the response function.
+        Array containing the (intensity) response function.
     HD_functions_IJ : numpy.ndarray
         Array containing the HD functions.
     HD_coeffs : numpy.ndarray
         Array containing the HD coefficients.
+    response_IJ_V : numpy.ndarray, optional
+        Contracted V-mode (circular polarisation) response, shape (F, N, N),
+        real and antisymmetric in the pulsar indices. If provided together with
+        `signal_std_V`, circular polarisation is injected. Default is None.
+    signal_std_V : numpy.ndarray, optional
+        Standard deviation of the V-mode signal per frequency, shape (F,).
+        Required when `response_IJ_V` is provided. Default is None.
     save_MCMC_data : bool, optional
         Whether to save the generated data
         Default is True
@@ -414,7 +433,35 @@ def generate_MCMC_data(
         Array containing strain noise.
     """
 
-    if realization:
+    include_V = response_IJ_V is not None and signal_std_V is not None
+
+    if include_V:
+        # --- Circular polarisation: complex Hermitian covariance C = R + i A ---
+        # R = response_IJ * P_I(f) + noise  (real symmetric, intensity + noise)
+        # A = response_IJ_V * P_V(f)        (real antisymmetric, V-mode signal)
+        R = (
+            np.einsum("fij,f->fij", response_IJ, signal_std**2) + strain_omega
+        )
+        A = np.einsum("fij,f->fij", response_IJ_V, signal_std_V**2)
+        covariance = R + 1j * A
+
+        if realization:
+            print("- Will generate a circular-polarised data realization\n")
+            # Joint draw z_f ~ CN(0, C_f) via complex Cholesky (C = L L^dagger),
+            # then form the Hermitian periodogram data = z z^dagger.
+            L = np.linalg.cholesky(covariance)
+            g = generate_gaussian(
+                0.0, 1.0, size=covariance.shape[:-1] + (1,)
+            )
+            z = np.matmul(L, g)[..., 0]
+            data = z[:, :, None] * np.conj(z[:, None, :])
+        else:
+            print(
+                "- Circular-polarised data will use the expectation value\n"
+            )
+            data = covariance
+
+    elif realization:
         # Use this part if you want data to be realized
         print("- Will generate a data realization\n")
 
@@ -445,23 +492,28 @@ def generate_MCMC_data(
             signal_data * np.conjugate(signal_data)
         )
 
+        # Combine signal and noise
+        data = signal_part + noise_part
+
     else:
         # Use this part if you don't want data to be realized
         print("- Data will use the expectation value\n")
         noise_part = strain_omega
         signal_part = response_IJ * (signal_std**2)[:, None, None]
 
-    # Combine signal and noise
-    data = signal_part + noise_part
+        # Combine signal and noise
+        data = signal_part + noise_part
 
     # Save the data
     if save_MCMC_data:
-        np.savez(
-            path_to_MCMC_data,
+        save_kwargs = dict(
             frequency=frequency,
             data=data,
             response_IJ=response_IJ,
             strain_omega=strain_omega,
         )
+        if include_V:
+            save_kwargs["response_IJ_V"] = response_IJ_V
+        np.savez(path_to_MCMC_data, **save_kwargs)
 
     return frequency, data, response_IJ, strain_omega
